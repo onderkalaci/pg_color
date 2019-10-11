@@ -19,101 +19,300 @@
 PG_MODULE_MAGIC;
 #endif
 
-#define COLOR_LENGTH 6
-#define MAX_COLOR_VALUE 16777215
 
-typedef int32 color;
+typedef struct color
+{
+	uint8 r;
+	uint8 g;
+	uint8 b;
+} color;
+
+
+#define DatumGetColor(X)	 ((color *) DatumGetPointer(X))
+#define ColorGetDatum(X)	 PointerGetDatum(X)
+#define PG_GETARG_COLOR(n)	 DatumGetColor(PG_GETARG_DATUM(n))
+#define PG_RETURN_COLOR(x)	 return ColorGetDatum(x)
+
 
 static inline
-int hex_to_binary(char h)
+color * color_from_str(char *str)
 {
-	if (h >= '0' && h <= '9')
-	{
-		return h - '0';
-	}
-	else if (h >= 'A' && h <= 'F')
-	{
-		return h + 10 - 'A';
-	}
-	else
-	{
-		elog(ERROR, "value '%c' is not a valid digit for type color.", h);
-	}
+  color *c = palloc0(sizeof(color));
 
-	return 0;
-}
 
-static inline
-char binary_to_hex(int b)
-{
-	char lookup_table[] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+	char *endptr = NULL;
+	char *cur = str;
+	if (cur[0] != '(')
+		elog(ERROR, "expected '(' at position 0");
 
-	if (b < 0 || b > 15)
-	{
-		elog(ERROR, "value '%d' is not a valid binary representation of a hex character", b);
-	}
+	cur++;
+	c->r = strtol(cur, &endptr, 10);
+	if (cur == endptr)
+		elog(ERROR, "expected number at position 1");
+	if (endptr[0] != ',')
+		elog(ERROR, "expected ',' at position " INT64_FORMAT, endptr - str);
 
-	return lookup_table[b];
-}
 
-static inline
-color color_from_str(const char *str)
-{
-  int i = 0;
-  color c = 0;
+	cur = endptr + 1;
+	c->g = strtoll(cur, &endptr, 10);
 
-  if(strlen(str) != COLOR_LENGTH)
-  {
-    ereport(ERROR,
-			(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-			 errmsg("value \"%s\" is out of range for type color", str)));
-  }
+	if (cur == endptr)
+		elog(ERROR, "expected number at position 2");
+	if (endptr[0] != ',')
+		elog(ERROR, "expected ',' at position " INT64_FORMAT, endptr - str);
 
-  for(i = 0; i < COLOR_LENGTH; i++) {
-    c <<= 4;
-	c |= hex_to_binary(str[i]);
-  }
+	cur = endptr + 1;
+	c->b = strtoll(cur, &endptr, 10);
+
+	if (endptr[0] != ')')
+		elog(ERROR, "expected ')' at position " INT64_FORMAT, endptr - str);
+	if (endptr[1] != '\0')
+		elog(ERROR, "unexpected character at position " INT64_FORMAT, 1 + (endptr - str));
+
 
   return c;
 }
 
 static inline
-char *color_to_str(color c)
+char *color_to_str(color *c)
 {
-  int i = 0;
-  char *str = palloc0((COLOR_LENGTH + 1) * sizeof(char));
-
-  if(c > MAX_COLOR_VALUE)
-  {
-    ereport(ERROR,
-			(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-			 errmsg("value \"%d\" is out of range for type color", c)));
-  }
-
-  for(i = COLOR_LENGTH - 1; i >= 0; i--)
-  {
-    str[i] = binary_to_hex(c & 15);
-	c >>= 4;
-  }
-
-  return str;
+	char *s = psprintf("(%d,%d,%d)", c->r, c->g, c->b);
+  return s;
 }
 
 Datum color_in(PG_FUNCTION_ARGS);
 Datum color_out(PG_FUNCTION_ARGS);
+
+Datum color_eq(PG_FUNCTION_ARGS);
+Datum color_ne(PG_FUNCTION_ARGS);
+Datum color_cmp(PG_FUNCTION_ARGS);
+
+Datum color_lt(PG_FUNCTION_ARGS);
+Datum color_le(PG_FUNCTION_ARGS);
+Datum color_gt(PG_FUNCTION_ARGS);
+Datum color_ge(PG_FUNCTION_ARGS);
 
 PG_FUNCTION_INFO_V1(color_in);
 Datum
 color_in(PG_FUNCTION_ARGS)
 {
     char *str = PG_GETARG_CSTRING(0);
-    PG_RETURN_INT32(color_from_str(str));
+
+    PG_RETURN_COLOR(color_from_str(str));
 }
 
 PG_FUNCTION_INFO_V1(color_out);
 Datum
 color_out(PG_FUNCTION_ARGS)
 {
-  color c = PG_GETARG_INT32(0);
+  color *c = (color *) PG_GETARG_COLOR(0);
+
   PG_RETURN_CSTRING(color_to_str(c));
+}
+
+
+PG_FUNCTION_INFO_V1(color_eq);
+Datum
+color_eq(PG_FUNCTION_ARGS)
+{
+
+  color *c1 = PG_GETARG_COLOR(0);
+  color *c2 = PG_GETARG_COLOR(1);
+
+ // return 0;
+
+  return c1->r == c2->r && c1->g == c2->g && c1->b == c2->b;
+}
+
+PG_FUNCTION_INFO_V1(color_ne);
+Datum
+color_ne(PG_FUNCTION_ARGS)
+{
+  color *c1 = (color *) PG_GETARG_COLOR(0);
+  color *c2 = (color *) PG_GETARG_COLOR(1);
+
+  return c1->r != c2->r || c1->g != c2->g || c1->b != c2->b;
+}
+
+
+PG_FUNCTION_INFO_V1(color_cmp);
+Datum
+color_cmp(PG_FUNCTION_ARGS)
+{
+  color *c1 = (color *) PG_GETARG_COLOR(0);
+  color *c2 = (color *) PG_GETARG_COLOR(1);
+
+  if (c1 == NULL)
+	  return 1;
+
+  if (c2 == NULL)
+	  return -1;
+
+  if (c1->r > c2->r)
+	  return 1;
+  else  if (c1->r < c2->r)
+	  return -1;
+
+  if (c1->g > c2->g)
+	  return 1;
+  else  if (c1->g < c2->g)
+	  return -1;
+
+  if (c1->b > c2->b)
+	  return 1;
+  else  if (c1->b < c2->b)
+	  return -1;
+
+  return 0;
+}
+
+
+PG_FUNCTION_INFO_V1(rgb_distance);
+Datum
+rgb_distance(PG_FUNCTION_ARGS)
+{
+  color *c1 = (color *) PG_GETARG_COLOR(0);
+  color *c2 = (color *) PG_GETARG_COLOR(1);
+
+
+  double d1 = (double)c1->r - c2->r;
+  double d2 = (double)c1->g - c2->g;
+  double d3 = (double)c1->b - c2->b;
+
+
+  PG_RETURN_FLOAT8(sqrt(d1 * d1 + d2 * d2 + d3 * d3));
+}
+
+PG_FUNCTION_INFO_V1(color_lt);
+Datum
+color_lt(PG_FUNCTION_ARGS)
+{
+  color *c1 = (color *) PG_GETARG_COLOR(0);
+  color *c2 = (color *) PG_GETARG_COLOR(1);
+
+  if (c1->r < c2->r)
+	  return 1;
+  else if (c1->r > c2->r)
+	  return 0;
+
+  if (c1->g < c2->g)
+	  return 1;
+  else if (c1->g > c2->g)
+	  return 0;
+
+  if (c1->b < c2->b)
+	  return 1;
+  else if (c1->b > c2->b)
+	  return 0;
+
+  return 0;
+}
+
+
+PG_FUNCTION_INFO_V1(color_le);
+Datum
+color_le(PG_FUNCTION_ARGS)
+{
+  color *c1 = (color *) PG_GETARG_COLOR(0);
+  color *c2 = (color *) PG_GETARG_COLOR(1);
+
+  if (c1->r < c2->r)
+	  return 1;
+  else if (c1->r > c2->r)
+	  return 0;
+
+  if (c1->g < c2->g)
+	  return 1;
+  else if (c1->g > c2->g)
+	  return 0;
+
+  if (c1->b < c2->b)
+	  return 1;
+  else if (c1->b > c2->b)
+	  return 0;
+
+  return 1;
+}
+
+PG_FUNCTION_INFO_V1(color_gt);
+Datum
+color_gt(PG_FUNCTION_ARGS)
+{
+  color *c1 = (color *) PG_GETARG_COLOR(0);
+  color *c2 = (color *) PG_GETARG_COLOR(1);
+
+  if (c1->r > c2->r)
+	  return 1;
+  else if (c1->r < c2->r)
+	  return 0;
+
+  if (c1->g > c2->g)
+	  return 1;
+  else if (c1->g < c2->g)
+	  return 0;
+
+  if (c1->b > c2->b)
+	  return 1;
+  else if (c1->b < c2->b)
+	  return 0;
+
+	 return 0;
+}
+
+
+PG_FUNCTION_INFO_V1(color_ge);
+Datum
+color_ge(PG_FUNCTION_ARGS)
+{
+  color *c1 = (color *) PG_GETARG_COLOR(0);
+  color *c2 = (color *) PG_GETARG_COLOR(1);
+
+  if (c1->r > c2->r)
+	  return 1;
+  else if (c1->r < c2->r)
+	  return 0;
+
+  if (c1->g > c2->g)
+	  return 1;
+  else if (c1->g < c2->g)
+	  return 0;
+
+  if (c1->b > c2->b)
+	  return 1;
+  else if (c1->b < c2->b)
+return 0;
+
+	 return 1;
+}
+
+PG_FUNCTION_INFO_V1(color_send);
+
+Datum
+color_send(PG_FUNCTION_ARGS)
+{
+	color *a = PG_GETARG_COLOR(0);
+	StringInfoData buf;
+
+	pq_begintypsend(&buf);
+
+	pq_sendint8(&buf, a->r);
+	pq_sendint8(&buf, a->g);
+	pq_sendint8(&buf, a->b);
+
+	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+}
+
+PG_FUNCTION_INFO_V1(color_recv);
+
+Datum
+color_recv(PG_FUNCTION_ARGS)
+{
+	StringInfo	buf = (StringInfo) PG_GETARG_POINTER(0);
+
+	color *result = palloc0(sizeof(color));
+	result->r = pq_getmsgint64(buf);
+	result->g = pq_getmsgint64(buf);
+	result->b = pq_getmsgint64(buf);
+
+	PG_RETURN_COLOR(result);
 }
