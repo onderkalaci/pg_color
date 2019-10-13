@@ -19,6 +19,7 @@
 PG_MODULE_MAGIC;
 #endif
 
+void _PG_init(void);
 
 typedef struct color
 {
@@ -33,6 +34,140 @@ typedef struct color
 #define PG_GETARG_COLOR(n)	 DatumGetColor(PG_GETARG_DATUM(n))
 #define PG_RETURN_COLOR(x)	 return ColorGetDatum(x)
 
+#include "miscadmin.h"
+#include "optimizer/planner.h"
+#include "nodes/extensible.h"
+
+PlannedStmt *
+pg_color_planner(Query *parse, int cursorOptions, ParamListInfo boundParams);
+static Node *
+PgColorCreateScan(CustomScan *scan);
+CustomScanMethods PgColorScanMethods = {
+	"PGColor Scan",
+	PgColorCreateScan
+};
+void
+_PG_init(void)
+{
+	if (!process_shared_preload_libraries_in_progress)
+	{
+		ereport(DEBUG4, (errmsg("Citus can only be loaded via shared_preload_libraries"),
+						errhint("Add citus to shared_preload_libraries configuration "
+								"variable in postgresql.conf in master and workers. Note "
+								"that citus should be at the beginning of "
+								"shared_preload_libraries.")));
+	}
+
+	RegisterCustomScanMethods(&PgColorScanMethods);
+
+	/* intercept planner */
+	planner_hook = pg_color_planner;
+}
+#include "nodes/extensible.h"
+typedef struct PGColorScanState
+{
+	CustomScanState customScanState;  /* underlying custom scan node */
+
+	Const *data;
+
+} PGColorScanState;
+
+
+
+
+static void
+PgColorBeginScan(CustomScanState *node, EState *estate, int eflags);
+static CustomExecMethods AdaptiveExecutorCustomExecMethods = {
+	.CustomName = "PGColorScanMethod",
+	.BeginCustomScan = PgColorBeginScan
+};
+
+
+static void
+PgColorBeginScan(CustomScanState *node, EState *estate, int eflags)
+{
+	PGColorScanState *scanState = NULL;
+
+
+	scanState = (PGColorScanState *) node;
+	elog(INFO, "PgColorBeginScan");
+
+}
+
+/*
+ * AdaptiveExecutorCreateScan creates the scan state for the adaptive executor.
+ */
+static Node *
+PgColorCreateScan(CustomScan *scan)
+{
+	PGColorScanState *scanState = palloc0(sizeof(PGColorScanState));
+
+	scanState->customScanState.ss.ps.type = T_CustomScanState;
+
+	scanState->customScanState.methods = &AdaptiveExecutorCustomExecMethods;
+
+
+	Node *node = (Node *) linitial(scan->custom_private);
+	Assert(IsA(node, Const));
+
+	scanState->data =  (Const *) node;
+
+	elog(INFO, "PgColorCreateScan: %ld", DatumGetInt64(((Const *) node)->constvalue));
+
+
+	return (Node *) scanState;
+}
+
+
+#include "nodes/makefuncs.h"
+PlannedStmt *
+pg_color_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
+{
+	CustomScan *customScan = makeNode(CustomScan);
+	static int scanCount = 1;
+
+	++scanCount;
+	elog(INFO, "Intercepted the planner");
+
+	Const *c = (Const *) makeConst(20, -1, InvalidOid,
+			   sizeof(int64),
+			   Int64GetDatum(scanCount), false,
+			   FLOAT8PASSBYVAL);
+	PlannedStmt *result = standard_planner(parse, cursorOptions, boundParams);
+	Node *PgColorData = NULL;
+
+	//customScan->scan.plan.targetlist = copyObject(parse->targetList);
+
+
+	customScan->methods = &PgColorScanMethods;
+
+	PgColorData = (Node *) c;
+
+	customScan->custom_private = list_make1(PgColorData);
+	customScan->flags = CUSTOMPATH_SUPPORT_BACKWARD_SCAN;
+
+	result->planTree =  &customScan->scan.plan;
+
+	return  result;
+}
+
+
+/* RemoteScanRangeTableEntry creates a range table entry from given column name
+* list to represent a remote scan.
+*/
+RangeTblEntry *
+RemoteScanRangeTableEntry(List *columnNameList)
+{
+	RangeTblEntry *remoteScanRangeTableEntry = makeNode(RangeTblEntry);
+
+	/* we use RTE_VALUES for custom scan because we can't look up relation */
+	remoteScanRangeTableEntry->rtekind = RTE_VALUES;
+	remoteScanRangeTableEntry->eref = makeAlias("remote_scan", columnNameList);
+	remoteScanRangeTableEntry->inh = false;
+	remoteScanRangeTableEntry->inFromCl = true;
+
+	return remoteScanRangeTableEntry;
+}
 
 static inline
 color * color_from_str(char *str)
